@@ -48,7 +48,7 @@ def check_volume_change():
             change = ((curr_vol - prev_vol) / prev_vol) * 100
             change = round(change, 2)
 
-            if abs(change) >= 50:
+            if abs(change) >= 500:
                 alarms.append(f"[ALARM] {coin} hacim değişimi: %{change}")
         except Exception as e:
             print(f"Hacim kontrol hatası ({coin}):", e)
@@ -57,7 +57,7 @@ def check_volume_change():
         for msg in alarms:
             send_telegram_message(msg)
     else:
-        send_telegram_message("⏱️ Hacim değişimi %50'yi aşmadı. Değişiklik yok.")
+        send_telegram_message("⏱️ Hacim değişimi %500'yi aşmadı. Değişiklik yok.")
 
 # === RSI Kontrol Fonksiyonu ===
 def get_rsi(prices, period=14):
