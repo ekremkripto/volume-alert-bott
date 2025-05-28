@@ -1,2 +1,13 @@
+# Temel gereksinimler
 flask
 requests
+pandas
+
+# Teknik analiz için TA kütüphanesi (en güncel hali)
+git+https://github.com/bukosabino/ta.git
+
+# Zamanlama işlemleri için (opsiyonel, schedule veya APScheduler kullanabilirsin)
+schedule
+
+# Telegram API için (alternatif: python-telegram-bot da kullanılabilir)
+python-telegram-bot==20.3
