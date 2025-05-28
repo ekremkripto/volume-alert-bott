@@ -2,113 +2,116 @@ import requests
 import time
 import threading
 from flask import Flask
+import pandas as pd
+from datetime import datetime
 
 app = Flask(__name__)
 
 # Telegram bilgileri
 TELEGRAM_TOKEN = "7426521746:AAF6Q0jLjICWEGgW_bS4AXfmdMlgZ8rL9f4"
 CHAT_ID = "6521428327"
+CRYPTO_API_KEY = "661200c9079b9706615c770477a45c662831df7a"
 
-# === Coin Listesi (coins.txt dosyasından okunur) ===
+
+
 def load_coins():
     try:
         with open("coins.txt", "r") as f:
             return [line.strip().upper() for line in f if line.strip()]
     except:
-        return ["BTCUSDT", "ETHUSDT"]  # Yedek liste
+        return ["BTCUSDT", "ETHUSDT"]
 
-# === Telegram Mesaj Gönderici ===
 def send_telegram_message(message):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-    payload = {
-        "chat_id": CHAT_ID,
-        "text": message
-    }
+    data = {"chat_id": CHAT_ID, "text": message}
     try:
-        r = requests.post(url, data=payload)
-        print("Telegram mesajı gönderildi:", r.json())
+        response = requests.post(url, data=data)
+        print("Telegram mesajı:", response.json())
     except Exception as e:
-        print("Telegram hatası:", e)
+        print("Telegram gönderim hatası:", e)
 
-# === Hacim Kontrol Fonksiyonu ===
-def check_volume_change():
+def check_volume_and_rsi():
     coins = load_coins()
-    alarms = []
+    volume_alerts = []
+    rsi_alerts = []
+
     for coin in coins:
-        url = f"https://api.binance.com/api/v3/klines?symbol={coin}&interval=5m&limit=2"
         try:
+            url = f"https://api.binance.com/api/v3/klines?symbol={coin}&interval=15m&limit=15"
             response = requests.get(url)
-            data = response.json()
-            if len(data) < 2:
+            df = pd.DataFrame(response.json())
+            if df.empty or len(df) < 15:
                 continue
-            prev_vol = float(data[0][7])
-            curr_vol = float(data[1][7])
+
+            df[4] = df[4].astype(float)  # Close fiyatı
+            df[7] = df[7].astype(float)  # Hacim
+
+            # RSI Hesabı
+            delta = df[4].diff()
+            gain = (delta.where(delta > 0, 0)).rolling(14).mean()
+            loss = (-delta.where(delta < 0, 0)).rolling(14).mean()
+            rs = gain / loss
+            rsi = 100 - (100 / (1 + rs))
+            last_rsi = rsi.iloc[-1]
+
+            if last_rsi > 70 or last_rsi < 30:
+                rsi_alerts.append(f"{coin} RSI: {round(last_rsi,2)}")
+
+            # Hacim kontrolü
+            prev_vol = df[7].iloc[-2]
+            curr_vol = df[7].iloc[-1]
             if prev_vol == 0:
                 continue
             change = ((curr_vol - prev_vol) / prev_vol) * 100
-            change = round(change, 2)
+            if abs(change) >= 50:
+                volume_alerts.append(f"{coin} hacim değişimi: %{round(change, 2)}")
 
-            if abs(change) >= 500:
-                alarms.append(f"[ALARM] {coin} hacim değişimi: %{change}")
         except Exception as e:
-            print(f"Hacim kontrol hatası ({coin}):", e)
+            print(f"{coin} işlem hatası:", e)
 
-    if alarms:
-        for msg in alarms:
-            send_telegram_message(msg)
-    else:
-        send_telegram_message("⏱️ Hacim değişimi %500'yi aşmadı. Değişiklik yok.")
+    messages = []
+    if volume_alerts:
+        messages.append("📊 Hacim Uyarıları:\n" + "\n".join(volume_alerts))
+    if rsi_alerts:
+        messages.append("📈 RSI Uyarıları:\n" + "\n".join(rsi_alerts))
+    if not messages:
+        messages.append("🔍 Değişiklik yok. Tüm coinler normal.")
+    
+    send_telegram_message("\n\n".join(messages))
 
-# === RSI Kontrol Fonksiyonu ===
-def get_rsi(prices, period=14):
-    delta = prices.diff()
-    gain = delta.where(delta > 0, 0.0)
-    loss = -delta.where(delta < 0, 0.0)
-    avg_gain = gain.rolling(window=period).mean()
-    avg_loss = loss.rolling(window=period).mean()
-    rs = avg_gain / avg_loss
-    rsi = 100 - (100 / (1 + rs))
-    return rsi
+def check_news():
+    try:
+        url = f"https://cryptopanic.com/api/v1/posts/?auth_token={CRYPTO_API_KEY}&filter=positive"
+        response = requests.get(url)
+        data = response.json()
+        posts = data.get("results", [])[:3]  # Son 3 haberi al
 
-def check_rsi():
-    coins = load_coins()
-    for coin in coins:
-        url = f"https://api.binance.com/api/v3/klines?symbol={coin}&interval=1h&limit=100"
-        try:
-            response = requests.get(url)
-            data = response.json()
-            closes = [float(kline[4]) for kline in data]
-            df = pd.DataFrame(closes, columns=["close"])
-            rsi_series = get_rsi(df["close"])
-            latest_rsi = rsi_series.iloc[-1]
+        if not posts:
+            return
 
-            if latest_rsi >= 70:
-                send_telegram_message(f"🔴 RSI AŞIRI ALIM: {coin} RSI = {round(latest_rsi, 2)}")
-            elif latest_rsi <= 30:
-                send_telegram_message(f"🟢 RSI AŞIRI SATIM: {coin} RSI = {round(latest_rsi, 2)}")
-        except Exception as e:
-            print(f"RSI kontrol hatası ({coin}):", e)
+        news_message = "📰 Yeni Pozitif Haberler:\n"
+        for post in posts:
+            title = post["title"]
+            link = post["url"]
+            news_message += f"- {title}\n{link}\n"
 
-# === Arka Planda Sürekli Çalışan İşlem ===
-def start_bot():
+        send_telegram_message(news_message)
+
+    except Exception as e:
+        print("Haber kontrol hatası:", e)
+
+def scheduled_task():
     while True:
-        print("Kontroller yapılıyor...")
-        check_volume_change()
-        check_rsi()
-        time.sleep(300)  # 5 dakika bekle
-
-# === Flask Web Server (UptimeRobot için) ===
-app = Flask(__name__)
+        print("🔁 Kontrol başlatıldı:", datetime.now())
+        check_volume_and_rsi()
+        check_news()
+        time.sleep(900)  # 15 dakika
 
 @app.route("/")
 def home():
     return "Bot aktif!"
 
-# === Botu ve Web Server'ı Başlat ===
 if __name__ == "__main__":
-    send_telegram_message("🤖 Bot başlatıldı. Her 5 dakikada hacim ve RSI kontrolü yapılacak.")
-    threading.Thread(target=start_bot).start()
-    app.run(host="0.0.0.0", port=8080)
-
-    # Web sunucusunu başlat
+    send_telegram_message("🚀 Bot başlatıldı! 15 dakikada bir RSI, hacim ve haber kontrolü yapılacak.")
+    threading.Thread(target=scheduled_task).start()
     app.run(host="0.0.0.0", port=8080)
