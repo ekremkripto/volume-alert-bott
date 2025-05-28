@@ -48,8 +48,8 @@ def check_market():
 
     for coin in coins:
         try:
-            # Binance 5dk mum verisi
-            url = f"https://api.binance.com/api/v3/klines?symbol={coin}&interval=5m&limit=2"
+            # Binance 15dk mum verisi
+            url = f"https://api.binance.com/api/v3/klines?symbol={coin}&interval=15m&limit=2"
             response = requests.get(url)
             data = response.json()
             if len(data) < 2:
@@ -120,7 +120,7 @@ def check_news():
         url = f"https://cryptopanic.com/api/v1/posts/?auth_token={CRYPTO_API_KEY}&filter=positive"
         response = requests.get(url)
         data = response.json()
-        posts = data.get("results", [])[:5]
+        posts = data.get("results", [])[:7]
 
         new_posts = []
         for post in posts:
