@@ -14,31 +14,26 @@ def load_coins():
     try:
         with open("coins.txt", "r") as f:
             return [line.strip().upper() for line in f if line.strip()]
-    except FileNotFoundError:
+    except:
         return ["BTCUSDT", "ETHUSDT"]  # Yedek liste
 
 # === Telegram Mesaj Gönderici ===
 def send_telegram_message(message):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-    max_length = 4000  # Telegram mesaj sınırına yakın güvenli limit
-
+    payload = {
+        "chat_id": TELEGRAM_CHAT_ID,
+        "text": message
+    }
     try:
-        for i in range(0, len(message), max_length):
-            part = message[i:i+max_length]
-            payload = {
-                "chat_id": CHAT_ID,
-                "text": part
-            }
-            r = requests.post(url, data=payload)
-            print("Telegram mesajı gönderildi:", r.json())
+        r = requests.post(url, data=payload)
+        print("Telegram mesajı gönderildi:", r.json())
     except Exception as e:
         print("Telegram hatası:", e)
 
 # === Hacim Kontrol Fonksiyonu ===
 def check_volume_change():
     coins = load_coins()
-    alerts = []  # %50 ve üzeri değişen coinler burada toplanacak
-
+    alarms = []
     for coin in coins:
         url = f"https://api.binance.com/api/v3/klines?symbol={coin}&interval=5m&limit=2"
         try:
@@ -53,24 +48,53 @@ def check_volume_change():
             change = ((curr_vol - prev_vol) / prev_vol) * 100
             change = round(change, 2)
 
-            if change >= 500:  # %500 ve üzeri artış için
-                alerts.append(f"{coin}: %{change}")
+            if abs(change) >= 50:
+                alarms.append(f"[ALARM] {coin} hacim değişimi: %{change}")
         except Exception as e:
-            print(f"Hacim kontrol hatası ({coin}): {e}")
+            print(f"Hacim kontrol hatası ({coin}):", e)
 
-    if alerts:
-        msg = "[ALARM] Aşağıdaki coinlerde %500'den fazla hacim artışı var:\n" + "\n".join(alerts)
+    if alarms:
+        for msg in alarms:
+            send_telegram_message(msg)
     else:
-        msg = "Hacimde %500'den fazla artış yok."
+        send_telegram_message("⏱️ Hacim değişimi %50'yi aşmadı. Değişiklik yok.")
 
-    send_telegram_message(msg)
+# === RSI Kontrol Fonksiyonu ===
+def get_rsi(prices, period=14):
+    delta = prices.diff()
+    gain = delta.where(delta > 0, 0.0)
+    loss = -delta.where(delta < 0, 0.0)
+    avg_gain = gain.rolling(window=period).mean()
+    avg_loss = loss.rolling(window=period).mean()
+    rs = avg_gain / avg_loss
+    rsi = 100 - (100 / (1 + rs))
+    return rsi
 
+def check_rsi():
+    coins = load_coins()
+    for coin in coins:
+        url = f"https://api.binance.com/api/v3/klines?symbol={coin}&interval=1h&limit=100"
+        try:
+            response = requests.get(url)
+            data = response.json()
+            closes = [float(kline[4]) for kline in data]
+            df = pd.DataFrame(closes, columns=["close"])
+            rsi_series = get_rsi(df["close"])
+            latest_rsi = rsi_series.iloc[-1]
+
+            if latest_rsi >= 70:
+                send_telegram_message(f"🔴 RSI AŞIRI ALIM: {coin} RSI = {round(latest_rsi, 2)}")
+            elif latest_rsi <= 30:
+                send_telegram_message(f"🟢 RSI AŞIRI SATIM: {coin} RSI = {round(latest_rsi, 2)}")
+        except Exception as e:
+            print(f"RSI kontrol hatası ({coin}):", e)
 
 # === Arka Planda Sürekli Çalışan İşlem ===
-def start_volume_bot():
+def start_bot():
     while True:
-        print("Hacim kontrolü yapılıyor...")
+        print("Kontroller yapılıyor...")
         check_volume_change()
+        check_rsi()
         time.sleep(300)  # 5 dakika bekle
 
 # === Flask Web Server (UptimeRobot için) ===
@@ -82,11 +106,9 @@ def home():
 
 # === Botu ve Web Server'ı Başlat ===
 if __name__ == "__main__":
-    # Başlatıldığında test mesajı gönder
-    send_telegram_message("🔔 Bot başlatıldı. Hacim kontrolü 1 saatte bir yapılacak.")
-
-    # Botu arka planda başlat
-    threading.Thread(target=start_volume_bot).start()
+    send_telegram_message("🤖 Bot başlatıldı. Her 5 dakikada hacim ve RSI kontrolü yapılacak.")
+    threading.Thread(target=start_bot).start()
+    app.run(host="0.0.0.0", port=8080)
 
     # Web sunucusunu başlat
     app.run(host="0.0.0.0", port=8080)
